@@ -62,8 +62,7 @@ func main() {
 	// 2. Generate and write the project directory tree
 	out.WriteString("## 1. Project Directory Structure\n```text\n")
 	generateTree(absPath, "", out)
-	out.WriteString("
-```\n\n")
+	out.WriteString("\n```\n\n")
 
 	// 3. Consolidate file contents
 	out.WriteString("## 2. Source Code Details\n\n")
@@ -100,8 +99,7 @@ func main() {
 		out.WriteString(fmt.Sprintf("### File: %s\n", relPath))
 		out.WriteString(fmt.Sprintf("```%s\n", getLanguageByExt(ext)))
 		out.Write(content)
-		out.WriteString("\n
-```\n\n")
+		out.WriteString("\n```\n\n")
 
 		fmt.Printf("Consolidated: %s\n", relPath)
 		return nil
