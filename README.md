@@ -1,11 +1,11 @@
-# code2Prompt.exe
+# code2prompt
 
-code2Prompt.exe is a command-line tool that automatically merges source code, configuration files, and documentation into a single context file. It is designed to help developers quickly prepare an entire project for AI models such as OpenAI GPT, Anthropic Claude, Google Gemini, DeepSeek DeepSeek, and Alibaba Cloud Qwen for code analysis, refactoring, debugging, documentation generation, and project understanding.
+code2prompt is a command-line tool that automatically merges source code, configuration files, and documentation into a single context file. It is designed to help developers quickly prepare an entire project for AI models such as OpenAI GPT, Anthropic Claude, Google Gemini, DeepSeek DeepSeek, and Alibaba Cloud Qwen for code analysis, refactoring, debugging, documentation generation, and project understanding.
 
 # Usage
 
 ```bash
-code2Prompt.exe [options]
+code2prompt [options]
 ```
 
 # Command-Line Options
@@ -22,19 +22,19 @@ code2Prompt.exe [options]
 Scan the current directory:
 
 ```bash
-code2Prompt.exe
+code2prompt
 ```
 
 Equivalent to:
 
 ```bash
-code2Prompt.exe -i .
+code2prompt -i .
 ```
 
 # Specify a Project Directory
 
 ```bash
-code2Prompt.exe -i ./my-project
+code2prompt -i ./my-project
 ```
 
 Output：
@@ -46,7 +46,7 @@ project_context.txt
 # Specify an Output File
 
 ```bash
-code2Prompt.exe -i ./my-project -o output.txt
+code2prompt -i ./my-project -o output.txt
 ```
 
 # File Filtering
@@ -54,25 +54,25 @@ code2Prompt.exe -i ./my-project -o output.txt
 Extract only Dart files:
 
 ```bash
-code2Prompt.exe -i . -f "*.dart"
+code2prompt -i . -f "*.dart"
 ```
 
 Extract both Go and Dart files:
 
 ```bash
-code2Prompt.exe -i . -f "*.go" -f "*.dart"
+code2prompt -i . -f "*.go" -f "*.dart"
 ```
 
 Extract specific files:
 
 ```bash
-code2Prompt.exe -f pubspec.yaml -f README.md
+code2prompt -f pubspec.yaml -f README.md
 ```
 
 Extract multiple key files:
 
 ```bash
-code2Prompt.exe -f main.go -f config.yaml -f Dockerfile
+code2prompt -f main.go -f config.yaml -f Dockerfile
 ```
 
 # Content Keyword Filtering
@@ -80,13 +80,13 @@ code2Prompt.exe -f main.go -f config.yaml -f Dockerfile
 Extract only files containing the keyword riverpod:
 
 ```bash
-code2Prompt.exe -i . -m riverpod
+code2prompt -i . -m riverpod
 ```
 
 Match multiple keywords:
 
 ```bash
-code2Prompt.exe -i . -m riverpod -m flutter_riverpod
+code2prompt -i . -m riverpod -m flutter_riverpod
 ```
 
 Any file containing at least one of the specified keywords will be included in the output.
@@ -96,5 +96,5 @@ Any file containing at least one of the specified keywords will be included in t
 Extract Riverpod-related code from all Dart files:
 
 ```bash
-code2Prompt.exe -i . -f "*.dart" -m riverpod
+code2prompt -i . -f "*.dart" -m riverpod
 ```
