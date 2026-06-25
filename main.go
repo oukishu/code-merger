@@ -21,8 +21,8 @@ func (s *stringSlice) Set(value string) error {
 	return nil
 }
 
-// Directories or file extensions to ignore by default
-var ignoredDirs = map[string]bool{
+// Default directories or file extensions to ignore
+var defaultIgnoredDirs = map[string]bool{
 	".git":         true,
 	".github":      true,
 	"node_modules": true,
@@ -47,14 +47,16 @@ var ignoredExtensions = map[string]bool{
 
 func main() {
 	// 1. Define command-line parameters
-	var inputDir string
+	var inputDirs stringSlice
+	var excludeDirs stringSlice
 	var outputFilePath string
 	var specificFiles stringSlice
 	var matchKeywords stringSlice
 
-	flag.StringVar(&inputDir, "i", ".", "Specify the input project directory")
+	flag.Var(&inputDirs, "i", "Specify the input project directory (can be used multiple times; defaults to '.' if none provided)")
+	flag.Var(&excludeDirs, "e", "Specify directories to exclude/ignore (can be used multiple times; appends to default list)")
 	flag.StringVar(&outputFilePath, "o", "project_context.txt", "Specify the output file path")
-	flag.Var(&specificFiles, "f", "Specify single/multiple file paths to process (can be used multiple times; will bypass -i directory traversal if specified)")
+	flag.Var(&specificFiles, "f", "Specify single/multiple file paths to process (can be used multiple times; will bypass directory traversal)")
 	flag.Var(&matchKeywords, "m", "Match keywords for content filtering (can be used multiple times; matches if a file contains any keyword)")
 
 	// Custom Usage help information
@@ -65,11 +67,18 @@ func main() {
 	}
 	flag.Parse()
 
-	// 2. Resolve absolute paths
-	absInputDir, err := filepath.Abs(inputDir)
-	if err != nil {
-		fmt.Printf("Unable to resolve the absolute path of the input directory: %v\n", err)
-		return
+	// If no input directories specified, default to current directory
+	if len(inputDirs) == 0 {
+		inputDirs = append(inputDirs, ".")
+	}
+
+	// Merge default ignored directories with user-specified exclusions
+	ignoredDirs := make(map[string]bool)
+	for k, v := range defaultIgnoredDirs {
+		ignoredDirs[k] = v
+	}
+	for _, dir := range excludeDirs {
+		ignoredDirs[dir] = true
 	}
 
 	out, err := os.Create(outputFilePath)
@@ -79,75 +88,90 @@ func main() {
 	}
 	defer out.Close()
 
-	// 3. Write metadata header content
+	// 2. Write metadata header content
 	out.WriteString("# Project Source Code Context\n\n")
 	out.WriteString("This is an automatically generated project context file intended for AI analysis.\n\n")
 
-	// 4. Generate and write project directory tree (only generated when not in specific file mode)
-	if len(specificFiles) == 0 {
-		fmt.Printf("Analyzing project directory: %s\n", absInputDir)
-		out.WriteString("## 1. Project Structure\n```text\n")
-		generateTree(absInputDir, "", out)
-		out.WriteString("\n```\n\n")
-	} else {
-		fmt.Printf("Processing %d specified file(s)...\n", len(specificFiles))
-	}
-
-	if len(matchKeywords) > 0 {
-		fmt.Printf("Filter activated. Only merging files containing the following keywords: %v\n", matchKeywords)
-	}
-
-	out.WriteString("## 2. Source Code Details\n\n")
-
-	// 5. Core processing logic: Distinguish between [Specific Files Mode] and [Directory Traversal Mode]
+	// 3. Core processing logic: Distinguish between [Specific Files Mode] and [Directory Traversal Mode]
 	if len(specificFiles) > 0 {
 		// --- Mode A: Process specified files ---
+		fmt.Printf("Processing %d specified file(s)...\n", len(specificFiles))
+		out.WriteString("## 1. Source Code Details (Specific Files Mode)\n\n")
+
 		for _, fPath := range specificFiles {
 			absFilePath, err := filepath.Abs(fPath)
 			if err != nil {
 				fmt.Printf("Unable to resolve file path: %s, error: %v\n", fPath, err)
 				continue
 			}
-			
-			// Check if file exists
+
 			info, err := os.Stat(absFilePath)
 			if err != nil || info.IsDir() {
 				fmt.Printf("Skipping invalid file path: %s\n", fPath)
 				continue
 			}
 
-			// Process the file
-			processFile(absFilePath, absInputDir, outputFilePath, matchKeywords, out)
+			processFile(absFilePath, filepath.Dir(absFilePath), outputFilePath, matchKeywords, out)
 		}
 	} else {
-		// --- Mode B: Traditional directory traversal mode ---
-		err = filepath.WalkDir(absInputDir, func(path string, d fs.DirEntry, err error) error {
+		// --- Mode B: Multiple directory traversal mode ---
+		
+		// 3.1 Generate Project Structure for all input directories
+		out.WriteString("## 1. Project Structure\n```text\n")
+		for _, inDir := range inputDirs {
+			absInputDir, err := filepath.Abs(inDir)
 			if err != nil {
-				return err
+				fmt.Printf("Unable to resolve the absolute path of input directory [%s]: %v\n", inDir, err)
+				continue
+			}
+			fmt.Printf("Analyzing project directory structure: %s\n", absInputDir)
+			out.WriteString(fmt.Sprintf("[%s]\n", filepath.Base(absInputDir)))
+			generateTree(absInputDir, "", ignoredDirs, out)
+			out.WriteString("\n")
+		}
+		out.WriteString("```\n\n")
+
+		if len(matchKeywords) > 0 {
+			fmt.Printf("Filter activated. Only merging files containing keywords: %v\n", matchKeywords)
+		}
+
+		out.WriteString("## 2. Source Code Details\n\n")
+
+		// 3.2 Traverse and process source files for each directory
+		for _, inDir := range inputDirs {
+			absInputDir, err := filepath.Abs(inDir)
+			if err != nil {
+				continue
 			}
 
-			// Skip ignored directories
-			if d.IsDir() {
-				if ignoredDirs[d.Name()] {
-					return filepath.SkipDir
+			fmt.Printf("Merging source files from: %s\n", absInputDir)
+			err = filepath.WalkDir(absInputDir, func(path string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
 				}
+
+				// Skip ignored directories completely during file contents merging
+				if d.IsDir() {
+					if ignoredDirs[d.Name()] {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+
+				// Skip binary/asset extensions, and prevent the tool from reading its own output
+				ext := strings.ToLower(filepath.Ext(d.Name()))
+				if ignoredExtensions[ext] || d.Name() == filepath.Base(outputFilePath) {
+					return nil
+				}
+
+				// Process the file
+				processFile(path, absInputDir, outputFilePath, matchKeywords, out)
 				return nil
+			})
+
+			if err != nil {
+				fmt.Printf("Encountered an error while traversing [%s]: %v\n", inDir, err)
 			}
-
-			// Skip binary/asset extensions, and prevent the tool from reading its own output
-			ext := strings.ToLower(filepath.Ext(d.Name()))
-			if ignoredExtensions[ext] || d.Name() == filepath.Base(outputFilePath) {
-				return nil
-			}
-
-			// Process the file
-			processFile(path, absInputDir, outputFilePath, matchKeywords, out)
-			return nil
-		})
-
-		if err != nil {
-			fmt.Printf("Encountered an error while traversing files: %v\n", err)
-			return
 		}
 	}
 
@@ -156,7 +180,6 @@ func main() {
 
 // Extracted single-file processing logic function (handles keyword filtering and writing)
 func processFile(path, baseDir, outputFilePath string, keywords stringSlice, out *os.File) {
-	// Read file contents
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return // Skip files that cannot be read
@@ -177,11 +200,14 @@ func processFile(path, baseDir, outputFilePath string, keywords stringSlice, out
 		}
 	}
 
-	// Calculate relative path for display mapping
+	// [Path Optimization Core]
+	// Calculate the file path relative to the current input directory (baseDir) being traversed
 	relPath, err := filepath.Rel(baseDir, path)
 	if err != nil || strings.HasPrefix(relPath, "..") {
-		// If the file is not within inputDir (e.g., an external file was passed via -f), directly display absolute path or filename
 		relPath = filepath.Base(path)
+	} else {
+		// Prepend the base directory's own last element name (e.g., "A") back onto the front of the path
+		relPath = filepath.Join(filepath.Base(baseDir), relPath)
 	}
 
 	ext := strings.ToLower(filepath.Ext(path))
@@ -195,8 +221,8 @@ func processFile(path, baseDir, outputFilePath string, keywords stringSlice, out
 	fmt.Printf("Merged: %s\n", relPath)
 }
 
-// Helper function: Recursively generates a text directory tree
-func generateTree(root, indent string, out *os.File) {
+// Helper function: Recursively generates a text directory tree (Includes ignored directories in framework skeleton)
+func generateTree(root, indent string, ignoredDirs map[string]bool, out *os.File) {
 	files, err := os.ReadDir(root)
 	if err != nil {
 		return
@@ -204,9 +230,6 @@ func generateTree(root, indent string, out *os.File) {
 
 	var filteredFiles []fs.DirEntry
 	for _, f := range files {
-		if f.IsDir() && ignoredDirs[f.Name()] {
-			continue
-		}
 		ext := strings.ToLower(filepath.Ext(f.Name()))
 		if !f.IsDir() && ignoredExtensions[ext] {
 			continue
@@ -221,14 +244,21 @@ func generateTree(root, indent string, out *os.File) {
 			marker = "└── "
 		}
 
-		out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, f.Name()))
+		isIgnoredDir := f.IsDir() && ignoredDirs[f.Name()]
 
-		if f.IsDir() {
+		displayName := f.Name()
+		if isIgnoredDir {
+			displayName = fmt.Sprintf("%s/ (excluded)", f.Name())
+		}
+
+		out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, displayName))
+
+		if f.IsDir() && !isIgnoredDir {
 			nextIndent := indent + "│   "
 			if isLast {
 				nextIndent = indent + "    "
 			}
-			generateTree(filepath.Join(root, f.Name()), nextIndent, out)
+			generateTree(filepath.Join(root, f.Name()), nextIndent, ignoredDirs, out)
 		}
 	}
 }
