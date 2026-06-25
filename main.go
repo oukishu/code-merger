@@ -21,7 +21,7 @@ func (s *stringSlice) Set(value string) error {
 	return nil
 }
 
-// Default directories or file extensions to ignore
+// Default excluded directory names (still keeping pure name matching as a quick base filter)
 var defaultIgnoredDirs = map[string]bool{
 	".git":         true,
 	".github":      true,
@@ -46,7 +46,6 @@ var ignoredExtensions = map[string]bool{
 }
 
 func main() {
-	// 1. Define command-line parameters
 	var inputDirs stringSlice
 	var excludeDirs stringSlice
 	var outputFilePath string
@@ -54,12 +53,11 @@ func main() {
 	var matchKeywords stringSlice
 
 	flag.Var(&inputDirs, "i", "Specify the input project directory (can be used multiple times; defaults to '.' if none provided)")
-	flag.Var(&excludeDirs, "e", "Specify directories to exclude/ignore (can be used multiple times; appends to default list)")
+	flag.Var(&excludeDirs, "e", "Specify directories to exclude/ignore (e.g., -e 'internal/winipcfg' or -e '.git')")
 	flag.StringVar(&outputFilePath, "o", "project_context.txt", "Specify the output file path")
 	flag.Var(&specificFiles, "f", "Specify single/multiple file paths to process (can be used multiple times; will bypass directory traversal)")
 	flag.Var(&matchKeywords, "m", "Match keywords for content filtering (can be used multiple times; matches if a file contains any keyword)")
 
-	// Custom Usage help information
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Options:\n")
@@ -67,18 +65,19 @@ func main() {
 	}
 	flag.Parse()
 
-	// If no input directories specified, default to current directory
 	if len(inputDirs) == 0 {
 		inputDirs = append(inputDirs, ".")
 	}
 
-	// Merge default ignored directories with user-specified exclusions
-	ignoredDirs := make(map[string]bool)
-	for k, v := range defaultIgnoredDirs {
-		ignoredDirs[k] = v
-	}
+	// Process user-defined exclusion paths:
+	// Uniformly convert backslashes \ to forward slashes / for cross-platform matching, and trim leading/trailing slashes
+	var userExcludePaths []string
 	for _, dir := range excludeDirs {
-		ignoredDirs[dir] = true
+		cleanDir := strings.ReplaceAll(dir, "\\", "/")
+		cleanDir = strings.Trim(cleanDir, "/")
+		if cleanDir != "" {
+			userExcludePaths = append(userExcludePaths, cleanDir)
+		}
 	}
 
 	out, err := os.Create(outputFilePath)
@@ -88,13 +87,11 @@ func main() {
 	}
 	defer out.Close()
 
-	// 2. Write metadata header content
 	out.WriteString("# Project Source Code Context\n\n")
 	out.WriteString("This is an automatically generated project context file intended for AI analysis.\n\n")
 
-	// 3. Core processing logic: Distinguish between [Specific Files Mode] and [Directory Traversal Mode]
 	if len(specificFiles) > 0 {
-		// --- Mode A: Process specified files ---
+		// --- Mode A: Specific Files Mode ---
 		fmt.Printf("Processing %d specified file(s)...\n", len(specificFiles))
 		out.WriteString("## 1. Source Code Details (Specific Files Mode)\n\n")
 
@@ -116,7 +113,7 @@ func main() {
 	} else {
 		// --- Mode B: Multiple directory traversal mode ---
 		
-		// 3.1 Generate Project Structure for all input directories
+		// 3.1 Generate directory tree structure
 		out.WriteString("## 1. Project Structure\n```text\n")
 		for _, inDir := range inputDirs {
 			absInputDir, err := filepath.Abs(inDir)
@@ -126,7 +123,7 @@ func main() {
 			}
 			fmt.Printf("Analyzing project directory structure: %s\n", absInputDir)
 			out.WriteString(fmt.Sprintf("[%s]\n", filepath.Base(absInputDir)))
-			generateTree(absInputDir, "", ignoredDirs, out)
+			generateTree(absInputDir, absInputDir, "", userExcludePaths, out)
 			out.WriteString("\n")
 		}
 		out.WriteString("```\n\n")
@@ -137,7 +134,7 @@ func main() {
 
 		out.WriteString("## 2. Source Code Details\n\n")
 
-		// 3.2 Traverse and process source files for each directory
+		// 3.2 Source code merging phase
 		for _, inDir := range inputDirs {
 			absInputDir, err := filepath.Abs(inDir)
 			if err != nil {
@@ -150,21 +147,20 @@ func main() {
 					return err
 				}
 
-				// Skip ignored directories completely during file contents merging
 				if d.IsDir() {
-					if ignoredDirs[d.Name()] {
+					// Calculate the current directory's path relative to the input root directory
+					relDir, _ := filepath.Rel(absInputDir, path)
+					if shouldIgnore(d.Name(), relDir, userExcludePaths) {
 						return filepath.SkipDir
 					}
 					return nil
 				}
 
-				// Skip binary/asset extensions, and prevent the tool from reading its own output
 				ext := strings.ToLower(filepath.Ext(d.Name()))
 				if ignoredExtensions[ext] || d.Name() == filepath.Base(outputFilePath) {
 					return nil
 				}
 
-				// Process the file
 				processFile(path, absInputDir, outputFilePath, matchKeywords, out)
 				return nil
 			})
@@ -178,14 +174,32 @@ func main() {
 	fmt.Printf("\nSuccess! All merged code has been written to: %s\n", outputFilePath)
 }
 
-// Extracted single-file processing logic function (handles keyword filtering and writing)
+// Determines whether a directory should be excluded
+func shouldIgnore(dirName, relPath string, userExcludePaths []string) bool {
+	// 1. Matches default global base filters (e.g., .git, node_modules)
+	if defaultIgnoredDirs[dirName] {
+		return true
+	}
+
+	// Uniformly convert the current path to forward slashes for comparison
+	standardRelPath := strings.ReplaceAll(relPath, "\\", "/")
+
+	// 2. Check if it matches rules specified by the user via -e
+	for _, exclude := range userExcludePaths {
+		// Exact match (e.g., "internal/winipcfg") or current path starts with the exclusion path (handling its subdirectories)
+		if standardRelPath == exclude || strings.HasPrefix(standardRelPath, exclude+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func processFile(path, baseDir, outputFilePath string, keywords stringSlice, out *os.File) {
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return // Skip files that cannot be read
+		return
 	}
 
-	// Keyword filtering logic (-m)
 	if len(keywords) > 0 {
 		matched := false
 		fileStr := string(content)
@@ -196,23 +210,19 @@ func processFile(path, baseDir, outputFilePath string, keywords stringSlice, out
 			}
 		}
 		if !matched {
-			return // If it doesn't contain any keywords, skip it
+			return
 		}
 	}
 
-	// [Path Optimization Core]
-	// Calculate the file path relative to the current input directory (baseDir) being traversed
 	relPath, err := filepath.Rel(baseDir, path)
 	if err != nil || strings.HasPrefix(relPath, "..") {
 		relPath = filepath.Base(path)
 	} else {
-		// Prepend the base directory's own last element name (e.g., "A") back onto the front of the path
 		relPath = filepath.Join(filepath.Base(baseDir), relPath)
 	}
 
 	ext := strings.ToLower(filepath.Ext(path))
 
-	// Write to the output file
 	out.WriteString(fmt.Sprintf("### File: %s\n", relPath))
 	out.WriteString(fmt.Sprintf("```%s\n", getLanguageByExt(ext)))
 	out.Write(content)
@@ -221,9 +231,9 @@ func processFile(path, baseDir, outputFilePath string, keywords stringSlice, out
 	fmt.Printf("Merged: %s\n", relPath)
 }
 
-// Helper function: Recursively generates a text directory tree (Includes ignored directories in framework skeleton)
-func generateTree(root, indent string, ignoredDirs map[string]bool, out *os.File) {
-	files, err := os.ReadDir(root)
+// Helper function: Generates a directory tree
+func generateTree(baseDir, currentRoot, indent string, userExcludePaths []string, out *os.File) {
+	files, err := os.ReadDir(currentRoot)
 	if err != nil {
 		return
 	}
@@ -244,7 +254,10 @@ func generateTree(root, indent string, ignoredDirs map[string]bool, out *os.File
 			marker = "└── "
 		}
 
-		isIgnoredDir := f.IsDir() && ignoredDirs[f.Name()]
+		fullPath := filepath.Join(currentRoot, f.Name())
+		relPath, _ := filepath.Rel(baseDir, fullPath)
+
+		isIgnoredDir := f.IsDir() && shouldIgnore(f.Name(), relPath, userExcludePaths)
 
 		displayName := f.Name()
 		if isIgnoredDir {
@@ -258,12 +271,11 @@ func generateTree(root, indent string, ignoredDirs map[string]bool, out *os.File
 			if isLast {
 				nextIndent = indent + "    "
 			}
-			generateTree(filepath.Join(root, f.Name()), nextIndent, ignoredDirs, out)
+			generateTree(baseDir, fullPath, nextIndent, userExcludePaths, out)
 		}
 	}
 }
 
-// Helper function: Maps extensions to Markdown syntax highlighting identifiers
 func getLanguageByExt(ext string) string {
 	switch ext {
 	case ".go":
