@@ -16,6 +16,7 @@ code2prompt [options]
 | -o string | project_context.txt | Specify the output context file |
 | -f value | Empty | Specify one or more files to process (can be used multiple times). When provided, full project scanning via -i is skipped |
 | -m value | Empty | Filter files by keyword (can be used multiple times). Files containing any specified keyword will be included |
+| -e value | Empty | Specify directories to exclude/ignore (e.g., -e 'internal/buffer' or -e '.git'). Can be used multiple times |
 
 # Basic Examples
 
@@ -97,4 +98,24 @@ Extract Riverpod-related code from all Dart files:
 
 ```bash
 code2prompt -i . -f "*.dart" -m riverpod
+```
+
+# Excluding Directories
+
+Ignore specific folders during scanning (such as version control items or internal dependencies):
+
+```bash
+code2prompt -i . -e ".git"
+```
+
+Exclude multiple directories at once:
+
+```bash
+code2prompt -i . -e "internal/buffer" -e ".git" -e "node_modules"
+```
+
+Extract Riverpod-related code from all Dart files while ignoring the test directory:
+
+```bash
+code2prompt -i . -f "*.dart" -m "riverpod" -e "test"
 ```
