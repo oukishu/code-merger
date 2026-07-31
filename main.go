@@ -35,9 +35,12 @@ var defaultIgnoredDirs = map[string]bool{
 
 var ignoredExtensions = map[string]bool{
 	".exe":  true,
+	".bmp":  true,
 	".png":  true,
 	".jpg":  true,
 	".jpeg": true,
+	".webp": true,
+	".ico": true,
 	".gif":  true,
 	".zip":  true,
 	".tar":  true,
