@@ -16,8 +16,10 @@ code2prompt [options]
 | -o string | project_context.txt | Specify the output context file |
 | -f value | Empty | Specify one or more files to process (can be used multiple times). When provided, full project scanning via -i is skipped |
 | -m value | Empty | Filter files by keyword (can be used multiple times). Files containing any specified keyword will be included |
-| -e value | Empty | Specify directories to exclude/ignore (e.g., -e 'internal/buffer' or -e '.git'). Can be used multiple times |
-| -inc value | Empty | Specify directories/files to forcibly include, overriding defaults (e.g., -inc 'dist'). Can be used multiple times |
+| -exclude value | Empty | Specify directories to exclude/ignore (e.g., -e 'internal/buffer' or -e '.git'). Can be used multiple times |
+| -include value | Empty | Specify directories/files to forcibly include, overriding defaults (e.g., -inc 'dist'). Can be used multiple times |
+| -exclude-file value | Empty | Specify files to exclude/ignore, comma-separated (e.g., -exclude-file 'a.txt,b.go') |
+| -include-file value | Empty | Specify files to forcibly include, comma-separated (e.g., -include-file 'config.json') |
 
 # Basic Examples
 

@@ -52,13 +52,17 @@ func main() {
 	var inputDirs stringSlice
 	var excludeDirs stringSlice
 	var includeDirs stringSlice
+	var excludeFiles stringSlice
+	var includeFiles stringSlice
 	var outputFilePath string
 	var specificFiles stringSlice
 	var matchKeywords stringSlice
 
 	flag.Var(&inputDirs, "i", "Specify the input project directory (can be used multiple times; defaults to '.' if none provided)")
-	flag.Var(&excludeDirs, "e", "Specify directories to exclude/ignore (e.g., -e 'internal/winipcfg' or -e '.git')")
-	flag.Var(&includeDirs, "inc", "Specify directories/files to forcibly include, overriding defaults (e.g., -inc 'dist')")
+	flag.Var(&excludeDirs, "exclude", "Specify directories to exclude/ignore, comma-separated (e.g., -exclude 'log,core')")
+	flag.Var(&includeDirs, "include", "Specify directories to forcibly include, comma-separated (e.g., -include 'dist,build')")
+	flag.Var(&excludeFiles, "exclude-file", "Specify files to exclude/ignore, comma-separated (e.g., -exclude-file 'a.txt,b.go')")
+	flag.Var(&includeFiles, "include-file", "Specify files to forcibly include, comma-separated (e.g., -include-file 'config.json')")
 	flag.StringVar(&outputFilePath, "o", "project_context.txt", "Specify the output file path")
 	flag.Var(&specificFiles, "f", "Specify single/multiple file paths to process (can be used multiple times; will bypass directory traversal)")
 	flag.Var(&matchKeywords, "m", "Match keywords for content filtering (can be used multiple times; matches if a file contains any keyword)")
@@ -76,6 +80,8 @@ func main() {
 
 	userExcludePaths := NormalizePaths(excludeDirs)
 	userIncludePaths := NormalizePaths(includeDirs)
+	userExcludeFiles := NormalizePaths(excludeFiles)
+	userIncludeFiles := NormalizePaths(includeFiles)
 
 	out, err := os.Create(outputFilePath)
 	if err != nil {
@@ -126,7 +132,7 @@ func main() {
 			}
 			fmt.Printf("Analyzing project directory structure: %s\n", absInputDir)
 			out.WriteString(fmt.Sprintf("[%s]\n", filepath.Base(absInputDir)))
-			generateTree(absInputDir, absInputDir, "", userExcludePaths, userIncludePaths, out)
+			generateTree(absInputDir, absInputDir, "", userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, out)
 			out.WriteString("\n")
 		}
 		out.WriteString("```\n\n")
@@ -147,15 +153,20 @@ func main() {
 			fmt.Printf("Merging source files from: %s\n", absInputDir)
 			err = filepath.WalkDir(absInputDir, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
-					return err
+					fmt.Printf("Skip: %v\n", err)
+					return nil
 				}
 
+				relPath, _ := filepath.Rel(absInputDir, path)
+
 				if d.IsDir() {
-					// Calculate the current directory's path relative to the input root directory
-					relDir, _ := filepath.Rel(absInputDir, path)
-					if shouldIgnore(d.Name(), relDir, userExcludePaths, userIncludePaths) {
+					if shouldIgnoreDir(d.Name(), relPath, userExcludePaths, userIncludePaths) {
 						return filepath.SkipDir
 					}
+					return nil
+				}
+
+				if shouldIgnoreFile(d.Name(), relPath, userExcludeFiles, userIncludeFiles) {
 					return nil
 				}
 
@@ -203,8 +214,11 @@ func NormalizePath(p string) string {
 func NormalizePaths(paths []string) []string {
 	var result []string
 	for _, p := range paths {
-		if cp := NormalizePath(p); cp != "" {
-			result = append(result, cp)
+		subPaths := strings.Split(p, ",")
+		for _, sp := range subPaths {
+			if cp := NormalizePath(sp); cp != "" {
+				result = append(result, cp)
+			}
 		}
 	}
 	return result
@@ -228,7 +242,7 @@ func matchPathRule(dirName, standardRelPath, rule string) bool {
 }
 
 // Determines whether a directory should be excluded
-func shouldIgnore(dirName, relPath string, userExcludePaths, userIncludePaths []string) bool {
+func shouldIgnoreDir(dirName, relPath string, userExcludePaths, userIncludePaths []string) bool {
 	standardRelPath := NormalizePath(relPath)
 
 	for _, inc := range userIncludePaths {
@@ -242,12 +256,31 @@ func shouldIgnore(dirName, relPath string, userExcludePaths, userIncludePaths []
 		return true
 	}
 
-	// 2. Check if it matches rules specified by the user via -e
+	// 2. Check if it matches rules specified by the user via -exclude
 	for _, exclude := range userExcludePaths {
 		if matchPathRule(dirName, standardRelPath, exclude) {
 			return true
 		}
 	}
+	return false
+}
+
+// Determines whether a file should be excluded
+func shouldIgnoreFile(fileName, relPath string, userExcludeFiles, userIncludeFiles []string) bool {
+	standardRelPath := NormalizePath(relPath)
+
+	for _, inc := range userIncludeFiles {
+		if matchPathRule(fileName, standardRelPath, inc) {
+			return false
+		}
+	}
+
+	for _, exc := range userExcludeFiles {
+		if matchPathRule(fileName, standardRelPath, exc) {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -289,7 +322,7 @@ func processFile(path, baseDir string, keywords stringSlice, out *os.File) {
 }
 
 // Helper function: Generates a directory tree
-func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userIncludePaths []string, out *os.File) {
+func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles []string, out *os.File) {
 	files, err := os.ReadDir(currentRoot)
 	if err != nil {
 		return
@@ -297,11 +330,24 @@ func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userInc
 
 	var filteredFiles []fs.DirEntry
 	for _, f := range files {
-		ext := strings.ToLower(filepath.Ext(f.Name()))
-		if !f.IsDir() && ignoredExtensions[ext] {
-			continue
+		fullPath := filepath.Join(currentRoot, f.Name())
+		relPath, err := filepath.Rel(baseDir, fullPath)
+		if err != nil {
+			relPath = f.Name()
 		}
-		filteredFiles = append(filteredFiles, f)
+
+		if f.IsDir() {
+			filteredFiles = append(filteredFiles, f)
+		} else {
+			ext := strings.ToLower(filepath.Ext(f.Name()))
+			if shouldIgnoreFile(f.Name(), relPath, userExcludeFiles, userIncludeFiles) {
+				continue
+			}
+			if ignoredExtensions[ext] {
+				continue
+			}
+			filteredFiles = append(filteredFiles, f)
+		}
 	}
 
 	for i, f := range filteredFiles {
@@ -312,23 +358,29 @@ func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userInc
 		}
 
 		fullPath := filepath.Join(currentRoot, f.Name())
-		relPath, _ := filepath.Rel(baseDir, fullPath)
-
-		isIgnoredDir := f.IsDir() && shouldIgnore(f.Name(), relPath, userExcludePaths, userIncludePaths)
-
-		displayName := f.Name()
-		if isIgnoredDir {
-			displayName = fmt.Sprintf("%s/ (excluded)", f.Name())
+		relPath, err := filepath.Rel(baseDir, fullPath)
+		if err != nil {
+			relPath = f.Name()
 		}
 
-		out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, displayName))
-
-		if f.IsDir() && !isIgnoredDir {
-			nextIndent := indent + "│   "
-			if isLast {
-				nextIndent = indent + "    "
+		if f.IsDir() {
+			isIgnoredDir := shouldIgnoreDir(f.Name(), relPath, userExcludePaths, userIncludePaths)
+			displayName := f.Name()
+			if isIgnoredDir {
+				displayName = fmt.Sprintf("%s/ (excluded)", f.Name())
 			}
-			generateTree(baseDir, fullPath, nextIndent, userExcludePaths, userIncludePaths, out)
+
+			out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, displayName))
+
+			if !isIgnoredDir {
+				nextIndent := indent + "│   "
+				if isLast {
+					nextIndent = indent + "    "
+				}
+				generateTree(baseDir, fullPath, nextIndent, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, out)
+			}
+		} else {
+			out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, f.Name()))
 		}
 	}
 }
