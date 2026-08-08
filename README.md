@@ -1,124 +1,115 @@
-# code2prompt
+# code-merger
 
-code2prompt is a command-line tool that automatically merges source code, configuration files, and documentation into a single context file. It is designed to help developers quickly prepare an entire project for AI models such as OpenAI GPT, Anthropic Claude, Google Gemini, DeepSeek DeepSeek, and Alibaba Cloud Qwen for code analysis, refactoring, debugging, documentation generation, and project understanding.
+A zero-dependency Go CLI tool that merges project source code into a single text file, designed for feeding project context to AI (code review, context injection, etc.).
 
-# Usage
+## Features
 
-```bash
-code2prompt [options]
-```
+- Pure standard library implementation, no third-party dependencies
+- Automatically generates a project directory tree (with exclusion markers)
+- Supports mixed processing of multiple directories and files
+- Directory/file-level include/exclude rules (comma-separated, repeatable flags)
+- Keyword filtering: only merge files containing specified keywords
+- Built-in default ignore rules for common binary/build artifact extensions and directories
+- Auto-tags code blocks with the correct language based on file extension (for Markdown rendering)
 
-# Command-Line Options
-
-| Option | Default | Description |
-|--------|--------|--------|
-| -i string | . | Specify the project root directory to scan |
-| -o string | project_context.txt | Specify the output context file |
-| -f value | Empty | Specify one or more files to process (can be used multiple times). When provided, full project scanning via -i is skipped |
-| -m value | Empty | Filter files by keyword (can be used multiple times). Files containing any specified keyword will be included |
-| -exclude value | Empty | Specify directories to exclude/ignore (e.g., -e 'internal/buffer' or -e '.git'). Can be used multiple times |
-| -include value | Empty | Specify directories/files to forcibly include, overriding defaults (e.g., -inc 'dist'). Can be used multiple times |
-| -exclude-file value | Empty | Specify files to exclude/ignore, comma-separated (e.g., -exclude-file 'a.txt,b.go') |
-| -include-file value | Empty | Specify files to forcibly include, comma-separated (e.g., -include-file 'config.json') |
-
-# Basic Examples
-
-Scan the current directory:
+## Build
 
 ```bash
-code2prompt
+go build -o code-merger main.go
 ```
 
-Equivalent to:
+## Usage
 
 ```bash
-code2prompt -i .
+code-merger [options]
 ```
 
-# Specify a Project Directory
+### Options
+
+| Flag | Description | Default |
+|---|---|---|
+| `-i` | Input project directory, can be specified multiple times | `.` |
+| `-o` | Output file path | `project_context.txt` |
+| `-f` | Specify individual file path(s) to process, bypassing directory traversal (repeatable) | - |
+| `-exclude` | Directories to exclude, comma-separated (e.g. `-exclude 'log,core'`) | - |
+| `-include` | Directories to forcibly include, comma-separated (takes priority over exclude and default ignore list) | - |
+| `-exclude-file` | Files to exclude, comma-separated | - |
+| `-include-file` | Files to forcibly include, comma-separated | - |
+| `-m` | Match keywords, repeatable; a file is kept if it contains any one keyword | - |
+
+### Examples
+
+Merge all source files in the current directory:
 
 ```bash
-code2prompt -i ./my-project
+code-merger -o context.txt
 ```
 
-Output：
+Merge multiple directories, exclude `log` and `test` directories, and only keep files containing the `TODO` keyword:
 
+```bash
+code-merger -i ./cmd -i ./internal -exclude 'log,test' -m TODO -o context.txt
+```
+
+Process only specific files:
+
+```bash
+code-merger -f main.go -f internal/router.go -o context.txt
+```
+
+Force-include the `build` directory even though it's ignored by default:
+
+```bash
+code-merger -i . -include build -o context.txt
+```
+
+## Two Modes of Operation
+
+- **Mode A (Specific Files Mode)**: Triggered when `-f` is passed. Processes the given file list directly, without directory traversal and without generating a directory tree.
+- **Mode B (Directory Traversal Mode)**: The default mode. First generates a tree structure for each `-i` directory, then recursively merges source files that match the filtering rules.
+
+## Default Ignore Rules
+
+**Directories** (matched by exact name):
+`.git` `.github` `node_modules` `vendor` `.idea` `.vscode` `dist` `build`
+
+**File extensions**:
+`.exe` `.bmp` `.png` `.jpg` `.jpeg` `.webp` `.ico` `.gif` `.zip` `.tar` `.gz` `.db`
+
+`-include` / `-include-file` rules have the highest priority and can override both the default ignore rules and `-exclude` rules.
+
+## Matching Rules (shared logic for include/exclude)
+
+A rule string matches a path if any of the following conditions hold:
+
+1. The directory/file name exactly equals the rule
+2. The relative path exactly equals the rule
+3. The relative path starts with `rule/` (subdirectory match)
+4. The relative path ends with `/rule` or contains a `/rule/` segment (match at any depth)
+
+## Output Format
+
+The generated file contains:
+
+```
+# Project Source Code Context
+
+## 1. Project Structure
 ```text
-project_context.txt
+[project-name]
+├── main.go
+└── internal/
+    └── ...
 ```
 
-# Specify an Output File
+## 2. Source Code Details
 
-```bash
-code2prompt -i ./my-project -o output.txt
+### File: project-name/main.go
+```go
+...file content...
+```
 ```
 
-# File Filtering
+## License
 
-Extract only Dart files:
-
-```bash
-code2prompt -i . -f "*.dart"
-```
-
-Extract both Go and Dart files:
-
-```bash
-code2prompt -i . -f "*.go" -f "*.dart"
-```
-
-Extract specific files:
-
-```bash
-code2prompt -f pubspec.yaml -f README.md
-```
-
-Extract multiple key files:
-
-```bash
-code2prompt -f main.go -f config.yaml -f Dockerfile
-```
-
-# Content Keyword Filtering
-
-Extract only files containing the keyword riverpod:
-
-```bash
-code2prompt -i . -m riverpod
-```
-
-Match multiple keywords:
-
-```bash
-code2prompt -i . -m riverpod -m flutter_riverpod
-```
-
-Any file containing at least one of the specified keywords will be included in the output.
-
-# Combining File and Content Filters
-
-Extract Riverpod-related code from all Dart files:
-
-```bash
-code2prompt -i . -f "*.dart" -m riverpod
-```
-
-# Excluding Directories
-
-Ignore specific folders during scanning (such as version control items or internal dependencies):
-
-```bash
-code2prompt -i . -e ".git"
-```
-
-Exclude multiple directories at once:
-
-```bash
-code2prompt -i . -e "internal/buffer" -e ".git" -e "node_modules"
-```
-
-Extract Riverpod-related code from all Dart files while ignoring the test directory:
-
-```bash
-code2prompt -i . -f "*.dart" -m "riverpod" -e "test"
-```
+GPL-3.0
