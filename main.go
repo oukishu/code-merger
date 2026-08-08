@@ -57,6 +57,7 @@ func main() {
 	var outputFilePath string
 	var specificFiles stringSlice
 	var matchKeywords stringSlice
+	var maxKB int64
 
 	flag.Var(&inputDirs, "i", "Specify the input project directory (can be used multiple times; defaults to '.' if none provided)")
 	flag.Var(&excludeDirs, "exclude", "Specify directories to exclude/ignore, comma-separated (e.g., -exclude 'log,core')")
@@ -66,6 +67,7 @@ func main() {
 	flag.StringVar(&outputFilePath, "o", "project_context.txt", "Specify the output file path")
 	flag.Var(&specificFiles, "f", "Specify single/multiple file paths to process (can be used multiple times; will bypass directory traversal)")
 	flag.Var(&matchKeywords, "m", "Match keywords for content filtering (can be used multiple times; matches if a file contains any keyword)")
+	flag.Int64Var(&maxKB, "max-size", 512, "Max file size allowed in KB (default: 512)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n", os.Args[0])
@@ -73,6 +75,8 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	maxBytes := maxKB * 1024
 
 	if len(inputDirs) == 0 {
 		inputDirs = append(inputDirs, ".")
@@ -117,6 +121,11 @@ func main() {
 				continue
 			}
 
+			if info.Size() > maxBytes {
+				fmt.Printf("Skipping large file: %s (> %dKB)\n", fPath, maxKB)
+				continue
+			}
+
 			processFile(absFilePath, filepath.Dir(absFilePath), matchKeywords, out)
 		}
 	} else {
@@ -132,7 +141,7 @@ func main() {
 			}
 			fmt.Printf("Analyzing project directory structure: %s\n", absInputDir)
 			out.WriteString(fmt.Sprintf("[%s]\n", filepath.Base(absInputDir)))
-			generateTree(absInputDir, absInputDir, "", userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, out)
+			generateTree(absInputDir, absInputDir, "", userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, maxBytes, out)
 			out.WriteString("\n")
 		}
 		out.WriteString("```\n\n")
@@ -172,6 +181,11 @@ func main() {
 
 				ext := strings.ToLower(filepath.Ext(d.Name()))
 				if ignoredExtensions[ext] {
+					return nil
+				}
+
+				info, err := d.Info()
+				if err != nil || info.Size() > maxBytes {
 					return nil
 				}
 
@@ -321,37 +335,15 @@ func processFile(path, baseDir string, keywords stringSlice, out *os.File) {
 	fmt.Printf("Merged: %s\n", relPath)
 }
 
-// Helper function: Generates a directory tree
-func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles []string, out *os.File) {
+// Helper function: Generates a directory tree without dropping entries (appends filter status)
+func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles []string, maxBytes int64, out *os.File) {
 	files, err := os.ReadDir(currentRoot)
 	if err != nil {
 		return
 	}
 
-	var filteredFiles []fs.DirEntry
-	for _, f := range files {
-		fullPath := filepath.Join(currentRoot, f.Name())
-		relPath, err := filepath.Rel(baseDir, fullPath)
-		if err != nil {
-			relPath = f.Name()
-		}
-
-		if f.IsDir() {
-			filteredFiles = append(filteredFiles, f)
-		} else {
-			ext := strings.ToLower(filepath.Ext(f.Name()))
-			if shouldIgnoreFile(f.Name(), relPath, userExcludeFiles, userIncludeFiles) {
-				continue
-			}
-			if ignoredExtensions[ext] {
-				continue
-			}
-			filteredFiles = append(filteredFiles, f)
-		}
-	}
-
-	for i, f := range filteredFiles {
-		isLast := i == len(filteredFiles)-1
+	for i, f := range files {
+		isLast := i == len(files)-1
 		marker := "├── "
 		if isLast {
 			marker = "└── "
@@ -368,6 +360,8 @@ func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userInc
 			displayName := f.Name()
 			if isIgnoredDir {
 				displayName = fmt.Sprintf("%s/ (excluded)", f.Name())
+			} else {
+				displayName = f.Name() + "/"
 			}
 
 			out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, displayName))
@@ -377,10 +371,24 @@ func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userInc
 				if isLast {
 					nextIndent = indent + "    "
 				}
-				generateTree(baseDir, fullPath, nextIndent, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, out)
+				generateTree(baseDir, fullPath, nextIndent, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, maxBytes, out)
 			}
 		} else {
-			out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, f.Name()))
+			ext := strings.ToLower(filepath.Ext(f.Name()))
+			isFiltered := false
+
+			if shouldIgnoreFile(f.Name(), relPath, userExcludeFiles, userIncludeFiles) || ignoredExtensions[ext] {
+				isFiltered = true
+			} else if info, err := f.Info(); err == nil && info.Size() > maxBytes {
+				isFiltered = true
+			}
+
+			displayName := f.Name()
+			if isFiltered {
+				displayName = fmt.Sprintf("%s (filtered)", f.Name())
+			}
+
+			out.WriteString(fmt.Sprintf("%s%s%s\n", indent, marker, displayName))
 		}
 	}
 }
