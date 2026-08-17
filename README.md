@@ -33,6 +33,7 @@ code-merger [options]
 | `-f` | Specify individual file path(s) to process, bypassing directory traversal (repeatable) | - |
 | `-exclude` | Directories to exclude, comma-separated (e.g. `-exclude 'log,core'`) | - |
 | `-include` | Directories to forcibly include, comma-separated (takes priority over exclude and default ignore list) | - |
+| `-exclude-all`  | Whitelist mode: exclude all directories and files by default | - |
 | `-exclude-file` | Files to exclude, comma-separated | - |
 | `-include-file` | Files to forcibly include, comma-separated | - |
 | `-m` | Match keywords, repeatable; a file is kept if it contains any one keyword | - |
