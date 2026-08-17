@@ -58,6 +58,7 @@ func main() {
 	var specificFiles stringSlice
 	var matchKeywords stringSlice
 	var maxKB int64
+	var excludeAll bool
 
 	flag.Var(&inputDirs, "i", "Specify the input project directory (can be used multiple times; defaults to '.' if none provided)")
 	flag.Var(&excludeDirs, "exclude", "Specify directories to exclude/ignore, comma-separated (e.g., -exclude 'log,core')")
@@ -68,6 +69,7 @@ func main() {
 	flag.Var(&specificFiles, "f", "Specify single/multiple file paths to process (can be used multiple times; will bypass directory traversal)")
 	flag.Var(&matchKeywords, "m", "Match keywords for content filtering (can be used multiple times; matches if a file contains any keyword)")
 	flag.Int64Var(&maxKB, "max-size", 512, "Max file size allowed in KB (default: 512)")
+	flag.BoolVar(&excludeAll, "exclude-all", false, "Whitelist mode: exclude all directories and files by default; use -include and -include-file to specify what to keep")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n", os.Args[0])
@@ -141,7 +143,7 @@ func main() {
 			}
 			fmt.Printf("Analyzing project directory structure: %s\n", absInputDir)
 			out.WriteString(fmt.Sprintf("[%s]\n", filepath.Base(absInputDir)))
-			generateTree(absInputDir, absInputDir, "", userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, maxBytes, out)
+			generateTree(absInputDir, absInputDir, "", userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, maxBytes, excludeAll, out)
 			out.WriteString("\n")
 		}
 		out.WriteString("```\n\n")
@@ -169,13 +171,13 @@ func main() {
 				relPath, _ := filepath.Rel(absInputDir, path)
 
 				if d.IsDir() {
-					if shouldIgnoreDir(d.Name(), relPath, userExcludePaths, userIncludePaths) {
+					if shouldIgnoreDir(d.Name(), relPath, userExcludePaths, userIncludePaths, userIncludeFiles, excludeAll) {
 						return filepath.SkipDir
 					}
 					return nil
 				}
 
-				if shouldIgnoreFile(d.Name(), relPath, userExcludeFiles, userIncludeFiles) {
+				if shouldIgnoreFile(d.Name(), relPath, userExcludeFiles, userIncludeFiles, userIncludePaths, excludeAll) {
 					return nil
 				}
 
@@ -255,14 +257,47 @@ func matchPathRule(dirName, standardRelPath, rule string) bool {
 	return false
 }
 
-// Determines whether a directory should be excluded
-func shouldIgnoreDir(dirName, relPath string, userExcludePaths, userIncludePaths []string) bool {
+// isAncestorPath reports whether relPath is an ancestor (or exact match) of rule,
+// i.e. whether descending into relPath could still reach something matching rule.
+func isAncestorPath(relPath, rule string) bool {
+	if rule == relPath {
+		return true
+	}
+	return strings.HasPrefix(rule, relPath+"/")
+}
+
+// Determines whether a directory should be excluded.
+// When excludeAllMode is true, everything is excluded by default (whitelist mode)
+// and only directories that match -include, or that sit on the path toward an
+// -include/-include-file rule, are kept.
+func shouldIgnoreDir(dirName, relPath string, userExcludePaths, userIncludePaths, userIncludeFiles []string, excludeAllMode bool) bool {
 	standardRelPath := NormalizePath(relPath)
+
+	// The traversal root itself is never excluded.
+	if standardRelPath == "." {
+		return false
+	}
 
 	for _, inc := range userIncludePaths {
 		if matchPathRule(dirName, standardRelPath, inc) {
 			return false
 		}
+	}
+
+	if excludeAllMode {
+		// Keep descending if this directory is on the path toward any included
+		// directory or file, even though it isn't itself a full match yet.
+		for _, inc := range userIncludePaths {
+			if isAncestorPath(standardRelPath, inc) {
+				return false
+			}
+		}
+		for _, inc := range userIncludeFiles {
+			if isAncestorPath(standardRelPath, inc) {
+				return false
+			}
+		}
+		return true
 	}
 
 	// 1. Matches default global base filters (e.g., .git, node_modules)
@@ -279,14 +314,26 @@ func shouldIgnoreDir(dirName, relPath string, userExcludePaths, userIncludePaths
 	return false
 }
 
-// Determines whether a file should be excluded
-func shouldIgnoreFile(fileName, relPath string, userExcludeFiles, userIncludeFiles []string) bool {
+// Determines whether a file should be excluded.
+// When excludeAllMode is true, a file is only kept if it explicitly matches an
+// -include-file rule, or falls under a directory matched by an -include rule.
+func shouldIgnoreFile(fileName, relPath string, userExcludeFiles, userIncludeFiles, userIncludePaths []string, excludeAllMode bool) bool {
 	standardRelPath := NormalizePath(relPath)
 
 	for _, inc := range userIncludeFiles {
 		if matchPathRule(fileName, standardRelPath, inc) {
 			return false
 		}
+	}
+
+	for _, inc := range userIncludePaths {
+		if matchPathRule(fileName, standardRelPath, inc) {
+			return false
+		}
+	}
+
+	if excludeAllMode {
+		return true
 	}
 
 	for _, exc := range userExcludeFiles {
@@ -336,7 +383,7 @@ func processFile(path, baseDir string, keywords stringSlice, out *os.File) {
 }
 
 // Helper function: Generates a directory tree without dropping entries (appends filter status)
-func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles []string, maxBytes int64, out *os.File) {
+func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles []string, maxBytes int64, excludeAllMode bool, out *os.File) {
 	files, err := os.ReadDir(currentRoot)
 	if err != nil {
 		return
@@ -356,7 +403,7 @@ func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userInc
 		}
 
 		if f.IsDir() {
-			isIgnoredDir := shouldIgnoreDir(f.Name(), relPath, userExcludePaths, userIncludePaths)
+			isIgnoredDir := shouldIgnoreDir(f.Name(), relPath, userExcludePaths, userIncludePaths, userIncludeFiles, excludeAllMode)
 			displayName := f.Name()
 			if isIgnoredDir {
 				displayName = fmt.Sprintf("%s/ (excluded)", f.Name())
@@ -371,13 +418,13 @@ func generateTree(baseDir, currentRoot, indent string, userExcludePaths, userInc
 				if isLast {
 					nextIndent = indent + "    "
 				}
-				generateTree(baseDir, fullPath, nextIndent, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, maxBytes, out)
+				generateTree(baseDir, fullPath, nextIndent, userExcludePaths, userIncludePaths, userExcludeFiles, userIncludeFiles, maxBytes, excludeAllMode, out)
 			}
 		} else {
 			ext := strings.ToLower(filepath.Ext(f.Name()))
 			isFiltered := false
 
-			if shouldIgnoreFile(f.Name(), relPath, userExcludeFiles, userIncludeFiles) || ignoredExtensions[ext] {
+			if shouldIgnoreFile(f.Name(), relPath, userExcludeFiles, userIncludeFiles, userIncludePaths, excludeAllMode) || ignoredExtensions[ext] {
 				isFiltered = true
 			} else if info, err := f.Info(); err == nil && info.Size() > maxBytes {
 				isFiltered = true
